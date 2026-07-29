@@ -1,0 +1,131 @@
+# Ebara Hydrostation Gateway.
+#
+# esp-idf framework is required (not arduino) so the Bluetooth host-stack
+# Kconfig choice (NimBLE) can be set directly.
+
+esphome:
+  name: ebara-hydro-gw
+  friendly_name: "Ebara Hydro GW"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_BT_ENABLED: "y"
+      CONFIG_BT_NIMBLE_ENABLED: "y"
+      CONFIG_BT_BLUEDROID_ENABLED: "n"
+      # Persist bond keys (LTK) in NVS so they survive ESP reboots.
+      CONFIG_BT_NIMBLE_NVS_PERSIST: "y"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "ebara-hydro-gw-fallback"
+    password: "hydrostation"
+
+logger:
+  # Connection/bonding/polling lifecycle events and errors/warnings are
+  # logged at INFO, so this level is quiet in normal operation. Per-poll
+  # traffic (>>> / <<< commands) and internal state transitions are logged
+  # at DEBUG — set `level: DEBUG` for detailed troubleshooting.
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+web_server:
+  port: 80
+  version: 3
+
+external_components:
+  - source:
+      type: local
+      path: components
+
+ebara_hydrostation:
+  # If true, the gateway stops right after the bonding handshake and never
+  # proceeds to service discovery/polling.
+  stop_after_bond_verify: false
+  update_interval: 15s
+  # No default_target_mac: the target is discovered via BLE scan (see
+  # start_scan_() in ebara_hydrostation.cpp) and selected through the HA
+  # "Ebara Hydrostation" config flow, which persists it to the ESP32's own
+  # flash (survives reboots independent of Home Assistant) — nothing
+  # hardcoded here.
+
+  target_mac:
+    name: "Target MAC"
+    id: target_mac_input
+    mode: text
+  gw_status:
+    name: "GW Status"
+    id: gw_status_sensor
+  errors_text:
+    name: "Errors"
+  discovered:
+    name: "Discovered Hydrostations"
+
+  target_pressure:
+    name: "Target Pressure"
+  start_pressure:
+    name: "Start Pressure"
+  actual_pressure:
+    name: "Actual Pressure"
+  motor_current:
+    name: "Motor Current"
+  working_hours:
+    name: "Working Hours"
+  motor_frequency:
+    name: "Motor Frequency"
+  module_temperature:
+    name: "Module Temperature"
+  dc_bus_voltage:
+    name: "DC Bus Voltage"
+  delta_pressure:
+    name: "Delta Pressure"
+  firmware_version:
+    name: "Firmware Version"
+  hardware_version:
+    name: "Hardware Version"
+  water_level:
+    name: "Estimated Water Level"
+  error_word:
+    name: "Error Word"
+  status_word:
+    name: "Status Word"
+  serial_number:
+    name: "Serial Number"
+  lot_number:
+    name: "Lot Number"
+
+  motor_running:
+    name: "Motor Running"
+  motor_enabled:
+    name: "Motor Enabled"
+  motor_error:
+    name: "Motor Error"
+
+  motor:
+    name: "Motor"
+  enable:
+    name: "Gateway Enable"
+
+  target_pressure_setpoint:
+    name: "Target Pressure Setpoint"
+  start_pressure_setpoint:
+    name: "Start Pressure Setpoint"
+  delta_pressure_setpoint:
+    name: "Delta Pressure Setpoint"
+  poll_interval:
+    name: "Update Interval"
+
+button:
+  - platform: restart
+    name: "ESP Reboot"
