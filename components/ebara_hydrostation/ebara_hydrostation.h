@@ -322,6 +322,12 @@ class EbaraHydrostationGateway : public PollingComponent {
   bool cmd_pending_{false};
   std::string cmd_pending_str_;
   uint32_t cmd_sent_at_ms_{0};
+  // Counts timeouts back-to-back, with no successful response in between.
+  // The BLE link can stay nominally connected while the pump stops
+  // answering (its supervision timeout not yet elapsed) — this detects that
+  // case and forces a reconnect instead of retrying forever with no visible
+  // status change.
+  uint8_t consecutive_timeouts_{0};
 
   EbaraTargetMacText *target_mac_text_{nullptr};
   text_sensor::TextSensor *gw_status_{nullptr};

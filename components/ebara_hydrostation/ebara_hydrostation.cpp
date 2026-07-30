@@ -428,6 +428,7 @@ void EbaraHydrostationGateway::set_gateway_enabled(bool enabled) {
     ESP_LOGI(TAG, "Gateway disabled — disconnecting.");
     this->cmd_pending_ = false;
     this->cmd_queue_.clear();
+    this->consecutive_timeouts_ = 0;
     this->cancel_timeout("cmd_timeout");
     this->cancel_timeout("intercmd_delay");
     this->cancel_timeout("subscribe_delay");
@@ -668,6 +669,7 @@ int EbaraHydrostationGateway::handle_gap_event(struct ble_gap_event *event) {
         ESP_LOGW(TAG, "Unexpected disconnect while in state %s", state_name_(this->state_));
         this->cmd_pending_ = false;
         this->cmd_queue_.clear();
+        this->consecutive_timeouts_ = 0;
         this->cancel_timeout("cmd_timeout");
         this->cancel_timeout("intercmd_delay");
         this->cancel_timeout("subscribe_delay");
@@ -1175,10 +1177,32 @@ void EbaraHydrostationGateway::send_command_now_(const std::string &cmd) {
   this->set_timeout("cmd_timeout", 8000, [this]() { this->handle_command_timeout_(); });
 }
 
+static constexpr uint8_t kMaxConsecutiveTimeouts = 3;
+
 void EbaraHydrostationGateway::handle_command_timeout_() {
   ESP_LOGW(TAG, "TIMEOUT waiting for response to '%s'", this->cmd_pending_str_.c_str());
   this->cmd_pending_ = false;
-  this->set_timeout("intercmd_delay", 300, [this]() { this->pump_command_queue_(); });
+  this->consecutive_timeouts_++;
+
+  if (this->consecutive_timeouts_ < kMaxConsecutiveTimeouts) {
+    this->set_timeout("intercmd_delay", 300, [this]() { this->pump_command_queue_(); });
+    return;
+  }
+
+  // The pump has stopped answering entirely, but the BLE link itself never
+  // reported a disconnect — force one so the normal reconnect path (and its
+  // "Disconnected" -> "Connecting..." status updates) actually runs, instead
+  // of retrying silently forever with the status stuck on "Polling".
+  ESP_LOGE(TAG, "%u consecutive command timeouts — treating link as dead, reconnecting.",
+           this->consecutive_timeouts_);
+  this->consecutive_timeouts_ = 0;
+  this->cmd_queue_.clear();
+  this->cancel_timeout("intercmd_delay");
+  this->set_state_(GwState::COOLDOWN);
+  this->set_gw_status_text_("Unresponsive — reconnecting...");
+  if (this->conn_handle_ != BLE_HS_CONN_HANDLE_NONE) {
+    ble_gap_terminate(this->conn_handle_, BLE_ERR_REM_USER_CONN_TERM);
+  }
 }
 
 void EbaraHydrostationGateway::on_notification_(const uint8_t *data, size_t len) {
@@ -1195,6 +1219,7 @@ void EbaraHydrostationGateway::on_notification_(const uint8_t *data, size_t len)
     return;
   }
   this->cancel_timeout("cmd_timeout");
+  this->consecutive_timeouts_ = 0;
   std::string cmd = this->cmd_pending_str_;
   this->cmd_pending_ = false;
   this->publish_from_response_(cmd, raw);
