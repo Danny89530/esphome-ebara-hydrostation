@@ -401,6 +401,40 @@ void EbaraHydrostationGateway::handle_host_sync() {
 }
 
 void EbaraHydrostationGateway::on_target_mac_set(const std::string &mac_str) {
+  if (mac_str.empty()) {
+    // Explicit clear: forget the target entirely instead of silently doing
+    // nothing — otherwise the persisted MAC in flash and have_target_addr_
+    // were left untouched, so the old MAC reappeared unchanged after a
+    // reboot and scanning never resumed.
+    ESP_LOGI(TAG, "Target MAC cleared — forgetting persisted MAC and resuming scan.");
+    this->have_target_addr_ = false;
+    this->target_addr_ = ble_addr_t{};
+    this->bond_verify_done_ = false;
+    this->session_primed_ = false;
+    PersistedMac pm{};
+    pm.valid = false;
+    this->mac_pref_.save(&pm);
+    this->cmd_pending_ = false;
+    this->cmd_queue_.clear();
+    this->consecutive_timeouts_ = 0;
+    this->cancel_timeout("cmd_timeout");
+    this->cancel_timeout("intercmd_delay");
+    this->cancel_timeout("subscribe_delay");
+    this->cancel_timeout("bond_verify_delay");
+    this->cancel_timeout("uart_prime_hold");
+    if (this->conn_handle_ != BLE_HS_CONN_HANDLE_NONE) {
+      // Scanning resumes from the BLE_GAP_EVENT_DISCONNECT handler once the
+      // link actually tears down.
+      ble_gap_terminate(this->conn_handle_, BLE_ERR_REM_USER_CONN_TERM);
+      this->set_state_(GwState::COOLDOWN);
+    } else {
+      this->set_state_(GwState::COOLDOWN);
+      if (this->gateway_enabled_)
+        this->start_scan_();
+    }
+    return;
+  }
+
   ble_addr_t addr{};
   if (!parse_mac_address(mac_str, &addr)) {
     ESP_LOGE(TAG, "Invalid MAC address: '%s' (expected AA:BB:CC:DD:EE:FF)", mac_str.c_str());
@@ -664,7 +698,12 @@ int EbaraHydrostationGateway::handle_gap_event(struct ble_gap_event *event) {
         this->set_timeout("bond_verify_delay", 3000,
                            [this]() { this->start_connect_(ConnectPurpose::BOND_VERIFY); });
       } else if (this->state_ == GwState::COOLDOWN) {
-        // Expected (e.g. the stop_after_bond_verify_ disconnect) — nothing to do.
+        // Expected (e.g. the stop_after_bond_verify_ disconnect, or a
+        // target-MAC clear tearing down an active session) — resume
+        // scanning if no target is set anymore.
+        if (!this->have_target_addr_ && this->gateway_enabled_) {
+          this->start_scan_();
+        }
       } else {
         ESP_LOGW(TAG, "Unexpected disconnect while in state %s", state_name_(this->state_));
         this->cmd_pending_ = false;
