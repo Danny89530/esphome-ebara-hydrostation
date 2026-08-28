@@ -271,6 +271,28 @@ class EbaraHydrostationGateway : public PollingComponent {
   };
   ESPPreferenceObject mac_pref_;
 
+  // Hardware/firmware constants that never change for the life of a given
+  // pairing (serial number, hardware version, firmware version): fetched
+  // once and cached here instead of being re-queried on every poll cycle.
+  // have_serial/have_hardware/have_firmware track partial progress
+  // individually (in case a fetch cycle only completes some of them before
+  // a disconnect), so only the still-missing ones are retried; valid is
+  // true once all three are known. Invalidated (all fields reset) whenever
+  // on_target_mac_set() sees an actual change of target — a different MAC
+  // may be a different physical pump — but survives a reboot that restores
+  // the same, already-known MAC.
+  struct PersistedStaticData {
+    uint32_t serial_number;
+    uint16_t hardware_version;
+    uint16_t firmware_version_raw;
+    bool have_serial;
+    bool have_hardware;
+    bool have_firmware;
+    bool valid;
+  };
+  ESPPreferenceObject static_data_pref_;
+  bool static_data_valid_{false};
+
   std::string default_target_mac_;
   bool have_target_addr_{false};
   ble_addr_t target_addr_{};

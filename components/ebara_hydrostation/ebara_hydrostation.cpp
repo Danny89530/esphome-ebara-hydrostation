@@ -33,7 +33,8 @@ namespace ebara_hydrostation {
 static const char *const TAG = "ebara_hydrostation";
 
 // Coherent bounds for the user-configurable poll update_interval: below 5s
-// there is no real benefit since a full poll cycle (11 sequential commands)
+// there is no real benefit since a full poll cycle (8 sequential commands,
+// or a few more during the one-time static-data fetch after a fresh pairing)
 // already takes several seconds; above 300s (5 min) sensor data would be too
 // stale to be useful for a pressure-monitoring pump.
 static constexpr float kUpdateIntervalMinS = 5.0f;
@@ -274,6 +275,20 @@ void EbaraUpdateIntervalNumber::control(float value) {
 void EbaraHydrostationGateway::setup() {
   global_ebara_instance = this;
   this->mac_pref_ = global_preferences->make_preference<PersistedMac>(fnv1_hash("ebara_hydrostation_target_mac"));
+  this->static_data_pref_ =
+      global_preferences->make_preference<PersistedStaticData>(fnv1_hash("ebara_hydrostation_static_data"));
+  PersistedStaticData sd{};
+  if (this->static_data_pref_.load(&sd) && sd.valid) {
+    this->static_data_valid_ = true;
+    // Published immediately at boot, with no BLE traffic at all, instead of
+    // waiting for the pump to be reachable.
+    if (this->firmware_version_sensor_ != nullptr)
+      this->firmware_version_sensor_->publish_state(sd.firmware_version_raw / 100.0f);
+    if (this->hardware_version_sensor_ != nullptr)
+      this->hardware_version_sensor_->publish_state(sd.hardware_version);
+    if (this->serial_number_text_ != nullptr)
+      this->serial_number_text_->publish_state(std::to_string(sd.serial_number));
+  }
 
   // ESPHome's own esp32/preferences.cpp already called nvs_flash_init() during
   // core startup; calling it again here is the same idiom ESPHome's own
@@ -414,6 +429,9 @@ void EbaraHydrostationGateway::on_target_mac_set(const std::string &mac_str) {
     PersistedMac pm{};
     pm.valid = false;
     this->mac_pref_.save(&pm);
+    PersistedStaticData sd{};
+    this->static_data_pref_.save(&sd);
+    this->static_data_valid_ = false;
     this->cmd_pending_ = false;
     this->cmd_queue_.clear();
     this->consecutive_timeouts_ = 0;
@@ -440,6 +458,17 @@ void EbaraHydrostationGateway::on_target_mac_set(const std::string &mac_str) {
     ESP_LOGE(TAG, "Invalid MAC address: '%s' (expected AA:BB:CC:DD:EE:FF)", mac_str.c_str());
     return;
   }
+
+  // Only an actual change of target (a different physical pump) should
+  // invalidate the cached static data below — a reboot restoring the same,
+  // already-known MAC from flash must not, or the one-time fetch would
+  // repeat on every single boot. Compared against the persisted MAC (not
+  // target_addr_/have_target_addr_, which reset to their in-RAM defaults on
+  // every boot regardless of what's actually on flash).
+  PersistedMac old_pm{};
+  bool had_valid_mac = this->mac_pref_.load(&old_pm) && old_pm.valid;
+  bool mac_changed = !had_valid_mac || memcmp(addr.val, old_pm.mac, sizeof(addr.val)) != 0;
+
   this->stop_scan_();
   this->target_addr_ = addr;
   this->have_target_addr_ = true;
@@ -447,6 +476,11 @@ void EbaraHydrostationGateway::on_target_mac_set(const std::string &mac_str) {
   memcpy(pm.mac, addr.val, sizeof(pm.mac));
   pm.valid = true;
   this->mac_pref_.save(&pm);
+  if (mac_changed) {
+    PersistedStaticData sd{};
+    this->static_data_pref_.save(&sd);
+    this->static_data_valid_ = false;
+  }
   ESP_LOGI(TAG, "Target MAC set: %s (saved to flash)", mac_str.c_str());
   if (this->gateway_enabled_ && this->state_ == GwState::IDLE) {
     this->start_connect_(this->bond_verify_done_ ? ConnectPurpose::SERVICE_SESSION : ConnectPurpose::INITIAL_BOND);
@@ -1181,11 +1215,28 @@ void EbaraHydrostationGateway::enqueue_full_poll_cycle_() {
   static const char *const kCmds[] = {
       "gm-0005", "gm-0063", "gm-0002", "gm-0061", "gm-0006",
       "gm-0008", "gm-0009", "gm-0011",
-      "gm-0051", "gm-0052",
-      "gm-0031", /* "gm-0032", */
   };
   for (const auto *c : kCmds)
     this->cmd_queue_.emplace_back(c);
+
+  // gm-0051 (firmware version), gm-0052 (hardware version), and gm-0031
+  // (serial number) are hardware/firmware constants that never change for
+  // the life of a pairing — queried once (see on_target_mac_set() for when
+  // that cache is invalidated) instead of every cycle. Only the
+  // still-missing ones are queued, so a fetch that only partially completed
+  // (e.g. a disconnect mid-cycle) resumes without repeating what it already
+  // got.
+  if (!this->static_data_valid_) {
+    PersistedStaticData sd{};
+    this->static_data_pref_.load(&sd);
+    if (!sd.have_firmware)
+      this->cmd_queue_.emplace_back("gm-0051");
+    if (!sd.have_hardware)
+      this->cmd_queue_.emplace_back("gm-0052");
+    if (!sd.have_serial)
+      this->cmd_queue_.emplace_back("gm-0031");
+  }
+
   this->pump_command_queue_();
 }
 
@@ -1369,15 +1420,37 @@ void EbaraHydrostationGateway::publish_from_response_(const std::string &cmd, co
   } else if (cmd == "gm-0051") {
     if (this->firmware_version_sensor_ != nullptr)
       this->firmware_version_sensor_->publish_state(v / 100.0f);
+    PersistedStaticData sd{};
+    this->static_data_pref_.load(&sd);
+    sd.firmware_version_raw = static_cast<uint16_t>(v);
+    sd.have_firmware = true;
+    sd.valid = sd.have_serial && sd.have_hardware && sd.have_firmware;
+    this->static_data_pref_.save(&sd);
+    this->static_data_valid_ = sd.valid;
   } else if (cmd == "gm-0052") {
     if (this->hardware_version_sensor_ != nullptr)
       this->hardware_version_sensor_->publish_state(v);
+    PersistedStaticData sd{};
+    this->static_data_pref_.load(&sd);
+    sd.hardware_version = static_cast<uint16_t>(v);
+    sd.have_hardware = true;
+    sd.valid = sd.have_serial && sd.have_hardware && sd.have_firmware;
+    this->static_data_pref_.save(&sd);
+    this->static_data_valid_ = sd.valid;
   } else if (cmd == "gm-0031") {
     // Serial number: parsed unsigned separately (see parse_dato_uint32) and
     // published as text — see the set_serial_number_text_sensor() comment
     // in the header for why.
+    uint32_t serial = parse_dato_uint32(raw);
     if (this->serial_number_text_ != nullptr)
-      this->serial_number_text_->publish_state(std::to_string(parse_dato_uint32(raw)));
+      this->serial_number_text_->publish_state(std::to_string(serial));
+    PersistedStaticData sd{};
+    this->static_data_pref_.load(&sd);
+    sd.serial_number = serial;
+    sd.have_serial = true;
+    sd.valid = sd.have_serial && sd.have_hardware && sd.have_firmware;
+    this->static_data_pref_.save(&sd);
+    this->static_data_valid_ = sd.valid;
   } else if (cmd == "gm-0032") {
     // Lot number, formatted as a 4-digit zero-padded "XX YYYY" string.
     if (this->lot_number_text_ != nullptr) {
