@@ -1391,18 +1391,27 @@ void EbaraHydrostationGateway::publish_from_response_(const std::string &cmd, co
   } else if (cmd == "gm-0005") {
     if (this->status_word_sensor_ != nullptr)
       this->status_word_sensor_->publish_state(v);
-    // Status-word bitmask: bit14 is inverted (0 = enabled).
+    // Status-word bitmask: bit14 is inverted (0 = enabled). bit11 is an
+    // external-stop condition (e.g. a float switch or dry-run protection)
+    // that overrides everything else — the official app's own "Running"
+    // status checks it before motor_run for exactly that reason.
     bool motor_error = (v & 0x8000) != 0;
     bool motor_enabled = (v & 0x4000) == 0;
-    bool motor_running = (v & 0x2000) != 0;
+    bool motor_running_raw = (v & 0x2000) != 0;
+    bool external_stop_active = (v & 0x0800) == 0;
+    bool motor_running = motor_running_raw && !external_stop_active;
     if (this->motor_error_bs_ != nullptr)
       this->motor_error_bs_->publish_state(motor_error);
     if (this->motor_enabled_bs_ != nullptr)
       this->motor_enabled_bs_->publish_state(motor_enabled);
     if (this->motor_running_bs_ != nullptr)
       this->motor_running_bs_->publish_state(motor_running);
+    // The "Motor" switch reflects and controls whether the pump's automatic
+    // control system is enabled (sm-0005:1/0), not whether the motor
+    // happens to be spinning right now — those are independent concepts:
+    // the motor only actually runs on water demand even while enabled.
     if (this->motor_switch_ != nullptr)
-      this->motor_switch_->publish_state(motor_running);
+      this->motor_switch_->publish_state(motor_enabled);
   } else if (cmd == "gm-0006") {
     if (this->working_hours_sensor_ != nullptr)
       this->working_hours_sensor_->publish_state(v);
