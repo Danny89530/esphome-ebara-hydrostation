@@ -175,7 +175,6 @@ class EbaraHydrostationGateway : public PollingComponent {
   // sensor, since both signed 32-bit parsing and ESPHome's float32 Sensor
   // (24-bit mantissa) lose precision above 2^31/2^24 respectively.
   void set_serial_number_text_sensor(text_sensor::TextSensor *s) { this->serial_number_text_ = s; }
-  void set_lot_number_text_sensor(text_sensor::TextSensor *s) { this->lot_number_text_ = s; }
 
   void set_motor_running_binary_sensor(binary_sensor::BinarySensor *s) { this->motor_running_bs_ = s; }
   void set_motor_enabled_binary_sensor(binary_sensor::BinarySensor *s) { this->motor_enabled_bs_ = s; }
@@ -375,7 +374,6 @@ class EbaraHydrostationGateway : public PollingComponent {
   binary_sensor::BinarySensor *motor_error_bs_{nullptr};
 
   text_sensor::TextSensor *serial_number_text_{nullptr};
-  text_sensor::TextSensor *lot_number_text_{nullptr};
 
   EbaraMotorSwitch *motor_switch_{nullptr};
   EbaraSetpointNumber *target_pressure_number_{nullptr};

@@ -69,7 +69,6 @@ CONF_ERROR_WORD = "error_word"
 CONF_STATUS_WORD = "status_word"
 
 CONF_SERIAL_NUMBER = "serial_number"
-CONF_LOT_NUMBER = "lot_number"
 
 CONF_MOTOR_RUNNING = "motor_running"
 CONF_MOTOR_ENABLED = "motor_enabled"
@@ -162,9 +161,6 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_SERIAL_NUMBER): text_sensor.text_sensor_schema().extend(
             cv.COMPONENT_SCHEMA
         ),
-        cv.Optional(CONF_LOT_NUMBER): text_sensor.text_sensor_schema().extend(
-            cv.COMPONENT_SCHEMA
-        ),
         cv.Optional(CONF_MOTOR_RUNNING): binary_sensor.binary_sensor_schema(),
         cv.Optional(CONF_MOTOR_ENABLED): binary_sensor.binary_sensor_schema(),
         cv.Optional(CONF_MOTOR_ERROR): binary_sensor.binary_sensor_schema(
@@ -242,10 +238,6 @@ async def to_code(config):
     if serial_conf := config.get(CONF_SERIAL_NUMBER):
         serial_var = await text_sensor.new_text_sensor(serial_conf)
         cg.add(var.set_serial_number_text_sensor(serial_var))
-
-    if lot_conf := config.get(CONF_LOT_NUMBER):
-        lot_var = await text_sensor.new_text_sensor(lot_conf)
-        cg.add(var.set_lot_number_text_sensor(lot_var))
 
     for key, setter in SENSOR_SETTERS.items():
         if (conf := config.get(key)) is not None:

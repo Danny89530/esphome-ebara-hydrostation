@@ -1208,10 +1208,6 @@ void EbaraHydrostationGateway::enqueue_full_poll_cycle_() {
   // publish_from_response_() for how the multi-value responses are fanned
   // back out). gm-0002 (start pressure) has no aggregate equivalent and
   // stays individual.
-  //
-  // gm-0032 (lot number) is left out of the active poll cycle since this
-  // unit reports it as never-programmed; the entity/parsing stay wired up
-  // (see the /* "gm-0032" */ line below) in case a future unit has it set.
   static const char *const kCmds[] = {
       "gm-0005", "gm-0063", "gm-0002", "gm-0061", "gm-0006",
       "gm-0008", "gm-0009", "gm-0011",
@@ -1460,14 +1456,6 @@ void EbaraHydrostationGateway::publish_from_response_(const std::string &cmd, co
     sd.valid = sd.have_serial && sd.have_hardware && sd.have_firmware;
     this->static_data_pref_.save(&sd);
     this->static_data_valid_ = sd.valid;
-  } else if (cmd == "gm-0032") {
-    // Lot number, formatted as a 4-digit zero-padded "XX YYYY" string.
-    if (this->lot_number_text_ != nullptr) {
-      char buf[16];
-      snprintf(buf, sizeof(buf), "%04d", static_cast<int>(v));
-      std::string s(buf);
-      this->lot_number_text_->publish_state(s.substr(0, 2) + " " + s.substr(2));
-    }
   }
 }
 

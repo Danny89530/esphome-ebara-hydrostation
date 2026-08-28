@@ -102,8 +102,6 @@ ebara_hydrostation:
     name: "Status Word"
   serial_number:
     name: "Serial Number"
-  lot_number:
-    name: "Lot Number"
 
   motor_running:
     name: "Motor Running"
