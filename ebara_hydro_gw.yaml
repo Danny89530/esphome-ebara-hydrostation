@@ -50,15 +50,14 @@ external_components:
       path: components
 
 ebara_hydrostation:
-  # If true, the gateway stops right after the bonding handshake and never
-  # proceeds to service discovery/polling.
-  stop_after_bond_verify: false
-  update_interval: 15s
-  # No default_target_mac: the target is discovered via BLE scan (see
-  # start_scan_() in ebara_hydrostation.cpp) and selected through the HA
-  # "Ebara Hydrostation" config flow, which persists it to the ESP32's own
-  # flash (survives reboots independent of Home Assistant) — nothing
-  # hardcoded here.
+  # Live values (status, pressures, current, alarms) are read every
+  # update_interval; slow-changing ones (working hours, temperature, DC bus
+  # voltage, start pressure) every 60 s. This is only the default of the
+  # "Update Interval" entity (2-300 s), adjustable at runtime.
+  update_interval: 10s
+  # No default_target_mac: the pump is discovered via BLE scan and selected in
+  # the Home Assistant "Ebara Hydrostation" config flow, which stores it in the
+  # ESP32's own flash.
 
   target_mac:
     name: "Target MAC"
@@ -72,12 +71,27 @@ ebara_hydrostation:
   discovered:
     name: "Discovered Hydrostations"
 
+  # Pump state, decoded from the status word as in the official app.
+  pump_status:
+    name: "Pump Status"
+  external_stop:
+    name: "External Stop"
+  status_bit10:
+    name: "Status Bit 10 (undocumented)"
+  pressure_unit:
+    name: "Pressure Unit"
+  device_name:
+    name: "Pump Device Name"
+
+  # Pressures are always published in bar.
   target_pressure:
     name: "Target Pressure"
   start_pressure:
     name: "Start Pressure"
   actual_pressure:
     name: "Actual Pressure"
+  delta_pressure:
+    name: "Delta Pressure"
   motor_current:
     name: "Motor Current"
   working_hours:
@@ -88,18 +102,12 @@ ebara_hydrostation:
     name: "Module Temperature"
   dc_bus_voltage:
     name: "DC Bus Voltage"
-  delta_pressure:
-    name: "Delta Pressure"
+  pump_load:
+    name: "Estimated Pump Load"
   firmware_version:
     name: "Firmware Version"
   hardware_version:
     name: "Hardware Version"
-  water_level:
-    name: "Estimated Water Level"
-  error_word:
-    name: "Error Word"
-  status_word:
-    name: "Status Word"
   serial_number:
     name: "Serial Number"
 
@@ -117,8 +125,6 @@ ebara_hydrostation:
 
   target_pressure_setpoint:
     name: "Target Pressure Setpoint"
-  start_pressure_setpoint:
-    name: "Start Pressure Setpoint"
   delta_pressure_setpoint:
     name: "Delta Pressure Setpoint"
   poll_interval:

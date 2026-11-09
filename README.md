@@ -28,10 +28,26 @@ component owns the whole thing end to end:
   on the ESP32 side, no button to press).
 - Persists the bond and the pump's MAC address to flash, so it survives ESP
   reboots without needing Home Assistant to re-send anything.
+- Checks the pump family by its Bluetooth device name: only **HYDRO** pumps
+  are supported. HYSTA pumps speak a different protocol and are reported as
+  unsupported instead of being polled.
 - Discovers the pump's GATT database, subscribes to its notifications, and
-  runs a sequential poll loop reading pressure, motor status, temperature,
-  voltage, working hours, firmware/hardware version, and more.
-- Lets you write pressure setpoints and start/stop the motor.
+  runs a sequential command queue (one command in flight at a time):
+  - live values (status, pressures, motor current, alarms) every update
+    interval;
+  - slow-changing values (working hours, module temperature, DC bus voltage,
+    start pressure) every 60 s;
+  - firmware/hardware version and serial number once per pump.
+- Decodes the status and alarm words exactly like the official app: pump
+  status (Running, Standby, Assist Mode, External Stop, Alarm, Pump Off),
+  motor flags, pressure unit and the active alarm codes (E01…E06, H01, H01+,
+  H02, C01).
+- Lets you set the target pressure and the restart delta (sent in the pump's
+  own unit, bar or psi, with the app's limits) and enable/disable the pump's
+  automatic control. Like the app, the motor command is refused while an
+  alarm is active.
+- Reports every live value as unknown while the pump is unreachable, so stale
+  readings are never shown as current.
 - Exposes a BLE scan mode (used during first-time setup) that lists nearby
   Hydrostation pumps by name/MAC/signal strength, so you don't need to know
   the MAC address up front.
@@ -44,11 +60,15 @@ integration linked above, which wraps them in something much friendlier.
 ## Hardware requirements
 
 - Any ESP32 board (this was built and tested against a plain `esp32dev`).
+- ESPHome 2026.10 or newer is what this is tested with.
 - Built on **esp-idf**, not Arduino — this component needs esp-idf's NimBLE
   Bluetooth stack, not the Bluedroid stack ESPHome's own Bluetooth
-  components use, since Bluedroid could never establish a reliable GATT
-  session with this pump's Bluetooth module. Bluedroid must be explicitly
-  disabled in favor of NimBLE (see the sdkconfig options below).
+  components use. Bluedroid must be explicitly disabled in favor of NimBLE
+  (see the sdkconfig options below). The component also enlarges the NimBLE
+  host task stack by itself (`CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE`), unless
+  you set that option yourself.
+- Don't add ESPHome's own `esp32_ble_tracker` / `bluetooth_proxy` to the same
+  ESP32: this component owns the Bluetooth stack.
 - WiFi in range of the ESP32, and the pump in Bluetooth range of it.
 
 ## Installation
@@ -61,7 +81,11 @@ external_components:
       type: git
       url: https://github.com/Danny89530/esphome-ebara-hydrostation
       path: components
+    refresh: 1d
 ```
+
+`refresh` controls how often ESPHome checks this repository for a newer
+version when you compile (use `0s` to always fetch the latest).
 
 Then set up the ESP32 with esp-idf and NimBLE:
 
@@ -99,7 +123,7 @@ and `ota_password`.
 
 ```yaml
 ebara_hydrostation:
-  update_interval: 15s
+  update_interval: 10s
   target_mac:
     name: "Target MAC"
   gw_status:
@@ -114,9 +138,40 @@ Every sensor, switch, and number the component can expose is configured the
 same way: a key under `ebara_hydrostation:` with a `name:`. You don't have
 to configure all of them — anything you leave out just won't be created.
 
-`update_interval` controls how often the whole poll cycle runs (default
-15s); it can also be changed at runtime through the "Update Interval" number
-entity if you expose it, without reflashing.
+`update_interval` controls how often the live values are read (default 10s,
+allowed 2–300 s); slow-changing values are read every 60 s regardless. It is
+only the default of the "Update Interval" number entity: if you expose that
+entity, the value you set there is stored on the ESP32 and takes effect
+immediately, without reflashing.
+
+The Home Assistant integration looks the gateway entities up **by name**, so
+keep the names used in `ebara_hydro_gw.yaml`.
+
+### Available entities
+
+| Key | Type | Notes |
+|---|---|---|
+| `target_mac`, `gw_status` | text / text sensor | Required. Pump MAC (set by the HA integration) and gateway state |
+| `discovered` | text sensor | Pumps found by the BLE scan (JSON, HYSTA flagged `supported: false`) |
+| `pump_status` | text sensor | Running, Standby, Assist Mode, External Stop, Alarm, Pump Off, Offline |
+| `errors_text` | text sensor | Active alarms with code and text, `No active alarms` otherwise |
+| `motor_running`, `motor_enabled`, `motor_error`, `external_stop` | binary sensor | Decoded status word |
+| `status_bit10` | binary sensor | Status bit not decoded by the app; exposed raw (diagnostic) |
+| `pressure_unit`, `device_name` | text sensor | Unit configured on the pump (bar/psi) and its Bluetooth name |
+| `actual_pressure`, `target_pressure`, `delta_pressure`, `start_pressure` | sensor | Always in bar (converted when the pump uses psi); start = target − delta |
+| `motor_current`, `pump_load` | sensor | Current in A; load estimate in % (the app's "FREQUENCY SPEED") |
+| `motor_frequency` | sensor | Raw value: its unit is not confirmed by the app |
+| `module_temperature`, `dc_bus_voltage`, `working_hours` | sensor | °C, V, h |
+| `firmware_version`, `hardware_version`, `serial_number` | text sensor / sensor | Firmware shown as `HH.LL` like the app |
+| `motor` | switch | Automatic control of the pump on/off (not "motor spinning now") |
+| `enable` | switch | Gateway on/off: OFF closes the Bluetooth link and stops polling |
+| `target_pressure_setpoint`, `delta_pressure_setpoint` | number | 2.0–5.5 bar and 0.5–2.0 bar (app limits) |
+| `poll_interval` | number | Live-values update interval, 2–300 s |
+
+## Upgrading
+
+See [CHANGELOG.md](CHANGELOG.md): it lists, for each version, exactly what to
+change in your YAML.
 
 You don't need to set a target MAC in the YAML at all — on first boot with
 no MAC configured, the component starts scanning and publishes discovered
